@@ -7,7 +7,7 @@ Expert Policy: Trained by DQN
 
 ## Multi-agent Forward Learning
 #### Nash-Q-Learning
-Environment Expirement with grid game 1 and 2
+Environment: Experiment with grid game 1 and 2
 ## Multi-agent Imitation Learning
 
 #### MAGAIL
