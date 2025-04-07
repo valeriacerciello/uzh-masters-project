@@ -4,6 +4,8 @@ from ray import tune
 from ray.rllib.env import PettingZooEnv
 from ray.rllib.algorithms.ppo import PPOConfig
 from pettingzoo.mpe import simple_push_v3
+from ray.tune.registry import register_env
+from ray.rllib.algorithms.ppo import PPOConfig
 
 # Define the environment
 def env_creator(config):
@@ -12,11 +14,7 @@ def env_creator(config):
     return PettingZooEnv(env)  # Wrap to make it Gymnasium-compatible
 
 # Register the environment
-from ray.tune.registry import register_env
 register_env("simple_push_v3", env_creator)
-
-
-import gymnasium as gym
 
 # Create a temporary environment to retrieve spaces.
 temp_env = env_creator({})
@@ -37,7 +35,6 @@ def policy_mapping_fn(agent_id, episode, **kwargs):
 
 
 # Configure the PPO algorithm
-from ray.rllib.algorithms.ppo import PPOConfig
 
 config = (
     PPOConfig() \
@@ -57,16 +54,16 @@ config = (
         train_batch_size=4000,
     ) \
     .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False) \
-    .env_runners(num_env_runners=2,  # Parallelize for faster training
-        num_envs_per_env_runner=4,)
-    )
+    .env_runners(num_env_runners=4,  # Parallelize for faster training
+        num_envs_per_env_runner=8,)
+    ).resources(num_gpus=1)
 
 
 ray.init()
 analysis = tune.run(
     "PPO",
     config=config.to_dict(),
-    stop={"training_iteration": 50},
+    stop={"training_iteration": 100},
     # stop={"env_runners/episode_reward_mean": -12},
     checkpoint_freq=10,
     checkpoint_at_end=True,
