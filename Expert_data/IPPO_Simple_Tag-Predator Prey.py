@@ -94,8 +94,8 @@ trainer = config.build()
 trainer.restore(checkpoint_path)
 
 def generate_expert_data(trainer, num_episodes=50):
-    # env = simple_tag_v3.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=25)
-    env = simple_tag_v3.parallel_env(continuous_actions=False, render_mode="human", max_cycles=25)
+    # env = simple_tag_v3.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=50)
+    env = simple_tag_v3.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=50)
 
     obs, _ = env.reset()  # Unpack properly
     
@@ -136,13 +136,15 @@ def generate_expert_data(trainer, num_episodes=50):
     agent_mean_rewards = {agent: np.mean(all_agent_rewards_per_episode[agent]) for agent in all_agents}
     return expert_data, agent_mean_rewards
 
-# Generate expert data using the trained policy
-expert_data, agent_mean_rewards = generate_expert_data(trainer, num_episodes=50)
 
-print("Agent Mean Rewards:", agent_mean_rewards)
-# Save expert data
-with open("expert_data_rllib.pickle", "wb") as f:
-    pickle.dump(expert_data, f)
+for num_episodes in [50, 100, 150, 200]:
+    # Generate expert data using the trained policy
+    expert_data, agent_mean_rewards = generate_expert_data(trainer, num_episodes=num_episodes)
+    print(f"num_episodes: {num_episodes}, agent_mean_rewards: {agent_mean_rewards}")
+    file_name = f"expert_data_rllib_simple_tag_{num_episodes}.pickle"
+    # Save expert data
+    with open(file_name, "wb") as f:
+        pickle.dump(expert_data, f)
 
 # Shutdown Ray
 ray.shutdown()
