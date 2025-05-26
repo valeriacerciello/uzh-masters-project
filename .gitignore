@@ -170,3 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 /plots
+/.idea
+/Training_Data

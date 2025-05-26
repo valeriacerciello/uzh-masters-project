@@ -1,4 +1,5 @@
 import pickle
+import numpy as np
 import ray
 from ray import tune
 from ray.rllib.env import PettingZooEnv
@@ -59,42 +60,46 @@ config = (
     ).resources(num_gpus=1)
 
 
-ray.init()
-analysis = tune.run(
-    "PPO",
-    config=config.to_dict(),
-    stop={"training_iteration": 100},
-    # stop={"env_runners/episode_reward_mean": -12},
-    checkpoint_freq=10,
-    checkpoint_at_end=True,
-)
+# ray.init()
+# analysis = tune.run(
+#     "PPO",
+#     config=config.to_dict(),
+#     stop={"training_iteration": 100},
+#     # stop={"env_runners/episode_reward_mean": -12},
+#     checkpoint_freq=10,
+#     checkpoint_at_end=True,
+# )
 
 
 
 
 
-best_trial = analysis.get_best_trial(metric="env_runners/episode_reward_mean", mode="max")
-if best_trial:
-    best_checkpoint = analysis.get_best_checkpoint(trial=best_trial, metric="env_runners/episode_reward_mean", mode="max")
-else:
-    raise ValueError("No valid trial found.")
+# best_trial = analysis.get_best_trial(metric="env_runners/episode_reward_mean", mode="max")
+# if best_trial:
+#     best_checkpoint = analysis.get_best_checkpoint(trial=best_trial, metric="env_runners/episode_reward_mean", mode="max")
+# else:
+#     raise ValueError("No valid trial found.")
 
-# Restore the trainer from the best checkpoint
-trainer = config.build()
-trainer.restore(best_checkpoint)
-
-
-# # Define the checkpoint path (replace this with your actual path)
-# checkpoint_path = "C:/Users/wangy/ray_results/PPO_2025-02-23_14-39-33/PPO_simple_speaker_listener_9d625_00000_0_2025-02-23_14-39-33/checkpoint_000000"  # This could be the path to a checkpoint folder or a specific checkpoint file
 # # Restore the trainer from the best checkpoint
 # trainer = config.build()
-# trainer.restore(checkpoint_path)
+# trainer.restore(best_checkpoint)
 
 
+# Define the checkpoint path (replace this with your actual path)
+checkpoint_path = "C:/Users/wangy/ray_results/PPO_2025-04-07_13-06-19/PPO_simple_push_v3_5558f_00000_0_2025-04-07_13-06-19/checkpoint_000009"  # This could be the path to a checkpoint folder or a specific checkpoint file
+# Restore the trainer from the best checkpoint
+trainer = config.build()
+trainer.restore(checkpoint_path)
+
+all_agents = ["adversary_0", "agent_0"]
 def generate_expert_data(trainer, num_episodes=50):
-    env = simple_push_v3.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=25)
+    env = simple_push_v3.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=50)
     
+
     obs, _ = env.reset()  # Unpack properly
+    
+    all_agent_rewards_per_episode = {agent: [] for agent in env.agents}
+
     
     expert_data = {agent: {"states": [], "actions": []} for agent in env.agents}
 
@@ -102,7 +107,8 @@ def generate_expert_data(trainer, num_episodes=50):
         obs, _ = env.reset()  # Unpack here as well
         # print(f"Agents after reset: {env.agents}")  # Check if agents are populated after reset
         done = {agent: False for agent in env.agents}
-        
+        episode_reward = {agent: 0 for agent in env.agents}
+
         while not all(done.values()):
             actions = {}
             for agent in env.agents:
@@ -118,16 +124,26 @@ def generate_expert_data(trainer, num_episodes=50):
                 if not done[agent]:
                     expert_data[agent]["states"].append(obs[agent])
                     expert_data[agent]["actions"].append(actions[agent])
+                episode_reward[agent] += rewards[agent]
             
             obs = next_obs  # Update observations
-    return expert_data
 
-# Generate expert data using the trained policy
-expert_data = generate_expert_data(trainer, num_episodes=50)
+        for agent in all_agents:
+            all_agent_rewards_per_episode[agent].append(episode_reward[agent])
+        
 
-# Save expert data
-with open("expert_data_rllib.pickle", "wb") as f:
-    pickle.dump(expert_data, f)
+    agent_mean_rewards = {agent: np.mean(all_agent_rewards_per_episode[agent]) for agent in all_agents}
+    return expert_data, agent_mean_rewards
+
+for num_episodes in [50, 100, 150, 200]:
+    # Generate expert data using the trained policy
+    expert_data, agent_mean_rewards = generate_expert_data(trainer, num_episodes=num_episodes)
+    print(f"num_episodes: {num_episodes}, agent_mean_rewards: {agent_mean_rewards}")
+
+    file_name = f"expert_data_rllib_simple_push_{num_episodes}.pickle"
+    # Save expert data
+    with open(file_name, "wb") as f:
+        pickle.dump(expert_data, f)
 
 # Shutdown Ray
 ray.shutdown()
