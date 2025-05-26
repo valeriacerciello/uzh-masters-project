@@ -5,9 +5,12 @@ from ray.rllib.env import PettingZooEnv
 from ray.rllib.algorithms.ppo import PPOConfig
 from pettingzoo.mpe import simple_speaker_listener_v4
 
+MAX_TIMESTEP = 25
+IS_TRAINING = True
+
 # Define the environment
 def env_creator(config):
-    env = simple_speaker_listener_v4.env(max_cycles=50)
+    env = simple_speaker_listener_v4.env(max_cycles=MAX_TIMESTEP)
     env.reset()
     return PettingZooEnv(env)  # Wrap to make it Gymnasium-compatible
 
@@ -49,39 +52,40 @@ config = PPOConfig() \
 
 
 ray.init()
-# analysis = tune.run(
-#     "PPO",
-#     config=config.to_dict(),
-#     stop={"env_runners/episode_reward_mean": -29},
-#     # stop={"training_iteration": 100},
-#     checkpoint_at_end=True,
-#
-# )
-# # stop={"env_runners/episode_reward_mean": -29},
-#
-#
-#
-#
-# best_trial = analysis.get_best_trial(metric="env_runners/episode_reward_mean", mode="max")
-# if best_trial:
-#     best_checkpoint = analysis.get_best_checkpoint(trial=best_trial, metric="env_runners/episode_reward_mean", mode="max")
-# else:
-#     raise ValueError("No valid trial found.")
-#
-# # Restore the trainer from the best checkpoint
-# trainer = config.build()
-# trainer.restore(best_checkpoint)
+
+if IS_TRAINING:
+    analysis = tune.run(
+        "PPO",
+        config=config.to_dict(),
+        stop={"env_runners/episode_reward_mean": -29},
+        # stop={"training_iteration": 100},
+        checkpoint_at_end=True,
+
+    )
+    # stop={"env_runners/episode_reward_mean": -29},
 
 
-# Define the checkpoint path (replace this with your actual path)
-checkpoint_path = "C:/Users/wangy/ray_results/PPO_2025-05-08_11-32-32/PPO_simple_speaker_listener_5dfac_00000_0_2025-05-08_11-32-32/checkpoint_000000"  # This could be the path to a checkpoint folder or a specific checkpoint file
-# Restore the trainer from the best checkpoint
-trainer = config.build()
-trainer.restore(checkpoint_path)
+    best_trial = analysis.get_best_trial(metric="env_runners/episode_reward_mean", mode="max")
+    if best_trial:
+        best_checkpoint = analysis.get_best_checkpoint(trial=best_trial, metric="env_runners/episode_reward_mean", mode="max")
+    else:
+        raise ValueError("No valid trial found.")
+
+    # Restore the trainer from the best checkpoint
+    trainer = config.build()
+    trainer.restore(best_checkpoint)
+
+else:
+
+    # Define the checkpoint path (replace this with your actual path)
+    checkpoint_path = "C:/Users/wangy/ray_results/PPO_2025-05-08_11-32-32/PPO_simple_speaker_listener_5dfac_00000_0_2025-05-08_11-32-32/checkpoint_000000"  # This could be the path to a checkpoint folder or a specific checkpoint file
+    # Restore the trainer from the best checkpoint
+    trainer = config.build()
+    trainer.restore(checkpoint_path)
 
 
 def generate_expert_data(trainer, num_episodes=50):
-    env = simple_speaker_listener_v4.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=50)
+    env = simple_speaker_listener_v4.parallel_env(continuous_actions=False, render_mode="rgb_array", max_cycles=MAX_TIMESTEP)
     
     obs, _ = env.reset()  # Unpack properly
     
@@ -112,7 +116,7 @@ def generate_expert_data(trainer, num_episodes=50):
 
 
 def evaluate_expert_policy(trainer, num_episodes=100):
-    env = simple_speaker_listener_v4.parallel_env(continuous_actions=False, max_cycles=50)
+    env = simple_speaker_listener_v4.parallel_env(continuous_actions=False, max_cycles=MAX_TIMESTEP)
     total_rewards = []
 
     for _ in range(num_episodes):
@@ -138,16 +142,16 @@ def evaluate_expert_policy(trainer, num_episodes=100):
 
 
 # Evaluate the expert policy for 100 episodes
-mean_reward = evaluate_expert_policy(trainer, num_episodes=2000)
+mean_reward = evaluate_expert_policy(trainer, num_episodes=200)
 
-print(f"Mean Reward over 2000 episodes: {mean_reward}")
+print(f"Mean Reward over 200 episodes: {mean_reward}")
 
-for num_episodes in [50, 100, 150, 200]:
+for num_episodes in [200]:
 
     # Generate expert data using the trained policy
     expert_data = generate_expert_data(trainer, num_episodes=num_episodes)
 
-    file_name = f"expert_data_rllib_simple_listener_speaker_{num_episodes}.pickle"
+    file_name = f"simple_listener_speaker_{MAX_TIMESTEP}_timesteps_{num_episodes}_episodes.pickle"
     # Save expert data
     with open(file_name, "wb") as f:
         pickle.dump(expert_data, f)
