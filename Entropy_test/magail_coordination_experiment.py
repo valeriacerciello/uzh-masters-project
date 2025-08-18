@@ -1,8 +1,10 @@
 # magail_coordination_experiment.py
 
 import os, random
+from turtle import color
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -535,78 +537,242 @@ def analyze_results(results, expert_data, use_sample_var=True, report_js_diverge
 # Plotting (expert-aware)
 # =========================
 def plot_results(results, analysis, collect_every=10):
+    """
+    results: dict[beta] -> dict[seed] -> {...}
+    analysis: dict containing per-beta summaries, e.g.
+        analysis[beta]["final_probs_all_seeds"]["agent_0"] -> List[float]
+        analysis[beta]["final_probs_all_seeds"]["agent_1"] -> List[float]
+        (optionally) analysis["extremes"] -> indices or beta values to highlight
+    collect_every: stride used when sampling training history (epochs)
+    """
+    # -------- helpers --------
+    def sort_betas(betas):
+        return sorted(betas, key=lambda b: float(b))
+
+    def normalize_extremes(analysis_obj, betas_sorted):
+        """
+        Returns a list of beta values to highlight. Accepts:
+          - analysis["extremes"] as indices (ints) or as beta values.
+          - If missing/invalid, defaults to [min_beta, max_beta].
+        """
+        if isinstance(analysis_obj, dict) and "extremes" in analysis_obj:
+            raw = analysis_obj["extremes"]
+            if not isinstance(raw, (list, tuple)):
+                raw = [raw]
+            norm = []
+            for e in raw:
+                # index path
+                if isinstance(e, (int, np.integer)):
+                    if 0 <= int(e) < len(betas_sorted):
+                        norm.append(betas_sorted[int(e)])
+                else:
+                    # treat as value; map to nearest existing beta
+                    try:
+                        e_float = float(e)
+                        idx = int(np.argmin(np.abs(np.array([float(b) for b in betas_sorted]) - e_float)))
+                        norm.append(betas_sorted[idx])
+                    except Exception:
+                        pass
+            if norm:
+                return list(dict.fromkeys(norm))  # de-dup, preserve order
+        # fallback: endpoints
+        return betas_sorted[:1] if len(betas_sorted) == 1 else [betas_sorted[0], betas_sorted[-1]]
+
+    def best_independent_js(expert_joint, grid=301):
+        """
+        Brute-force (p0, p1) on a grid in [0,1] to approximate
+        the minimal JS distance between expert_joint and any product policy p0 x p1.
+        """
+        ps = np.linspace(0.0, 1.0, grid)
+        best = np.inf
+        for p0 in ps:
+            for p1 in ps:
+                prod = np.array(
+                    [p0*p1, p0*(1-p1), (1-p0)*p1, (1-p0)*(1-p1)],
+                    dtype=float
+                )
+                d = float(jensenshannon(expert_joint, prod, base=2.0))
+                if d < best:
+                    best = d
+        return best
+
+
+    betas_sorted = sort_betas(list(results.keys()))
+    beta_values = betas_sorted  
+    seeds = sorted(list(results[beta_values[0]].keys()))
+    extremes = normalize_extremes(analysis, betas_sorted)
+
+    # colormaps
+    beta_cmap = mpl.colormaps.get_cmap('tab10').resampled(max(len(beta_values), 1))
+
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     fig.suptitle('MAGAIL Entropy Experiment Results', fontsize=16)
 
-    beta_values = list(results.keys())
-    seeds = sorted(list(results[beta_values[0]].keys()))
-
-    # Plot 1: Variance of P(A) vs β
+    # =========================
+    # Plot 1: P(A) vs β (violins)
+    # =========================
     ax1 = axes[0, 0]
-    v0 = [analysis[b]["prob_A_variance"]["agent_0"] for b in beta_values]
-    v1 = [analysis[b]["prob_A_variance"]["agent_1"] for b in beta_values]
-    x = np.arange(len(beta_values))
-    w = 0.35
-    ax1.bar(x - w/2, v0, w, label='Agent 0', alpha=0.8)
-    ax1.bar(x + w/2, v1, w, label='Agent 1', alpha=0.8)
-    ax1.set_xlabel('β')
-    ax1.set_ylabel('Var P(A) across seeds')
-    ax1.set_title('Policy Variance vs Entropy Regularization')
-    ax1.set_xticks(x); ax1.set_xticklabels([f'{b}' for b in beta_values])
-    ax1.legend(); ax1.grid(True, alpha=0.3)
+    data0 = [analysis[b]["final_probs_all_seeds"]["agent_0"] for b in beta_values]
+    data1 = [analysis[b]["final_probs_all_seeds"]["agent_1"] for b in beta_values]
 
-    # Plot 2: JS metric (joint) vs β
+    x = np.arange(len(beta_values)).astype(float)
+    offset = 0.18
+    width = 0.30
+
+    v0 = ax1.violinplot(data0, positions=x - offset, widths=width,
+                        showmeans=True, showextrema=False, showmedians=False)
+    v1 = ax1.violinplot(data1, positions=x + offset, widths=width,
+                        showmeans=True, showextrema=False, showmedians=False)
+
+    # Color/alpha bodies to distinguish agents
+    for pc in v0['bodies']:
+        pc.set_alpha(0.4)
+    for pc in v1['bodies']:
+        pc.set_alpha(0.4)
+
+    # Thicken mean lines (LineCollection can differ by mpl version)
+    for coll in [v0.get('cmeans'), v1.get('cmeans')]:
+        if coll is not None:
+            try:
+                coll.set_linewidths(2.0)
+            except Exception:
+                try:
+                    coll.set_linewidth(2.0)
+                except Exception:
+                    pass
+
+    ax1.axhline(0.5, linestyle='--', alpha=0.5, color='red')  # mixed policy
+    ax1.set_xlim(-0.6, len(beta_values) - 0.4)
+    ax1.set_ylim(0.0, 1.0)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f'{b}' for b in beta_values])
+    ax1.set_xlabel('β')
+    ax1.set_ylabel('P(A) across seeds')
+    ax1.set_title('Learning Stability')
+    proxy0 = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.6)
+    proxy1 = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.6, color="orange")
+    ax1.legend([proxy0, proxy1], ['Agent 0', 'Agent 1'], loc='upper right')
+    ax1.grid(True, alpha=0.3)
+
+    # =========================
+    # Plot 2: JS (joint) vs β
+    # =========================
     ax2 = axes[0, 1]
-    js_key = "js_divergence" if "js_divergence" in analysis[beta_values[0]] else "js_distance"
-    js_m = [analysis[b][js_key]["mean"] for b in beta_values]
-    js_v = [analysis[b][js_key]["variance"] for b in beta_values]
-    ax2.bar(np.arange(len(beta_values)), js_m, width=0.6, alpha=0.8,
-            yerr=np.sqrt(js_v), capsize=5, error_kw={'linewidth': 2})
+    js_per_beta = []
+    for b in beta_values:
+        js_vals = []
+        for s in seeds:
+            js_vals.append(float(jensenshannon(
+                np.asarray(results[b][s]["expert_joint"], dtype=float),
+                np.asarray(results[b][s]["learner_joint"], dtype=float),
+                base=2.0
+            )))
+        js_per_beta.append(js_vals)
+
+    x = np.arange(len(beta_values)).astype(float)
+    v = ax2.violinplot(js_per_beta, positions=x, widths=0.6,
+                       showmeans=True, showextrema=False, showmedians=False)
+    for pc in v['bodies']:
+        pc.set_alpha(0.4)
+    if v.get('cmeans') is not None:
+        try:
+            v['cmeans'].set_linewidths(2.0)
+        except Exception:
+            try:
+                v['cmeans'].set_linewidth(2.0)
+            except Exception:
+                pass
+
+    exemplar = results[beta_values[0]][seeds[0]]
+    expert_joint = np.asarray(exemplar["expert_joint"], dtype=float)
+    indep_limit = best_independent_js(expert_joint, grid=301)
+    ax2.axhline(indep_limit, linestyle='--', alpha=0.5, color='red',)
+
     ax2.set_xlabel('β')
-    ax2.set_ylabel('JS Divergence (joint)' if js_key == 'js_divergence' else 'JS Distance (joint)')
-    ax2.set_title('Reconstruction Error vs Entropy Regularization')
-    ax2.set_xticks(np.arange(len(beta_values))); ax2.set_xticklabels([f'{b}' for b in beta_values])
+    ax2.set_ylabel('JS distance (joint)')
+    ax2.set_title('JS Distance vs β')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([f'{b}' for b in beta_values])
     ax2.grid(True, alpha=0.3)
 
-    # Plot 3: Final P(A) per seed
+    proxy_violin = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.4)
+    proxy_limit = plt.Line2D([0], [0], linestyle='--', linewidth=2, alpha=0.7)
+    ax2.legend([proxy_violin, proxy_limit],
+               ['Across-seed distribution', 'Independent-policy limit'],
+               loc='upper right')
+
+    # =========================
+    # Plot 3: Final P(A) per seed (scatter)
+    # =========================
     ax3 = axes[0, 2]
-    cmap = plt.cm.get_cmap('tab10', len(beta_values))
     markers = ['o', 's']
     for i, b in enumerate(beta_values):
         pa0 = analysis[b]["final_probs_all_seeds"]["agent_0"]
         pa1 = analysis[b]["final_probs_all_seeds"]["agent_1"]
         jitter = 0.02
         xs = [i + np.random.uniform(-jitter, jitter) for _ in range(len(seeds))]
-        ax3.scatter(xs, pa0, alpha=0.85, color=cmap(i), marker=markers[0], s=50, label=f'β={b} A0' if i < 2 else None)
-        ax3.scatter(xs, pa1, alpha=0.85, color=cmap(i), marker=markers[1], s=50, label=f'β={b} A1' if i < 2 else None)
+        ax3.scatter(xs, pa0, alpha=0.85, color=beta_cmap(i), marker=markers[0], s=50,
+                    label=f'β={b} A0' if i < 2 else None)
+        ax3.scatter(xs, pa1, alpha=0.85, color=beta_cmap(i), marker=markers[1], s=50,
+                    label=f'β={b} A1' if i < 2 else None)
     ax3.axhline(0.5, color='red', linestyle='--', alpha=0.7, label='0.5 ref')
-    ax3.set_xlabel('β index (jittered)'); ax3.set_ylabel('P(A)')
+    ax3.set_xlabel('β index (jittered)')
+    ax3.set_ylabel('P(A)')
     ax3.set_title('Final Policy Probabilities Across Seeds')
-    ax3.set_xticks(np.arange(len(beta_values))); ax3.set_xticklabels([f'{b}' for b in beta_values])
-    ax3.legend(fontsize=9, ncol=2); ax3.grid(True, alpha=0.3)
+    ax3.set_xticks(np.arange(len(beta_values)))
+    ax3.set_xticklabels([f'{b}' for b in beta_values])
+    ax3.legend(fontsize=9, ncol=2)
+    ax3.grid(True, alpha=0.3)
 
-    # Plot 4: Entropy during training (mean±std) for extreme β
+    # =========================
+    # Plot 4: Equilibrium selection vs β
+    # =========================
     ax4 = axes[1, 0]
-    extremes = [beta_values[0], beta_values[-1]]
-    colors = ['blue', 'orange']
-    for b, c in zip(extremes, colors):
-        all_ent = [results[b][s]["history"]["entropy"]["agent_0"] for s in seeds]
-        arr = np.array(all_ent, dtype=float)
-        mean_e = np.mean(arr, axis=0)
-        std_e = np.std(arr, axis=0)
-        epochs = np.arange(len(mean_e)) * collect_every
-        ax4.plot(epochs, mean_e, label=f'β={b}', linewidth=2, color=c)
-        ax4.fill_between(epochs, mean_e - std_e, mean_e + std_e, alpha=0.3, color=c)
-    ax4.set_xlabel('Training Epoch'); ax4.set_ylabel('Policy Entropy')
-    ax4.set_title('Policy Entropy During Training (Averaged)')
-    ax4.legend(); ax4.grid(True, alpha=0.3)
+    eps = 0.05  # tolerance for symmetric vs collapsed
 
+    prop_AA, prop_BB, prop_sym = [], [], []
+    for b in beta_values:
+        aa = bb = sym = 0
+        for s in seeds:
+            p0 = float(results[b][s]["final_probs"]["agent_0"][0])
+            p1 = float(results[b][s]["final_probs"]["agent_1"][0])
+            if p0 > 0.5 + eps and p1 > 0.5 + eps:
+                aa += 1
+            elif p0 < 0.5 - eps and p1 < 0.5 - eps:
+                bb += 1
+            else:
+                sym += 1
+        total = aa + bb + sym if (aa + bb + sym) > 0 else 1
+        prop_AA.append(aa / total)
+        prop_BB.append(bb / total)
+        prop_sym.append(sym / total)
+
+    x = np.arange(len(beta_values))
+    b1 = ax4.bar(x, prop_AA, alpha=0.85, label='Collapse to AA')
+    b2 = ax4.bar(x, prop_BB, bottom=prop_AA, alpha=0.85, label='Collapse to BB')
+    bottom = (np.array(prop_AA) + np.array(prop_BB)).tolist()
+    b3 = ax4.bar(x, prop_sym, bottom=bottom, alpha=0.85, label='Symmetric (no collapse)')
+
+    ax4.set_xlabel('β')
+    ax4.set_ylabel('Proportion of seeds')
+    ax4.set_title('Equilibrium Selection Across Seeds')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels([f'{b}' for b in beta_values])
+    ax4.set_ylim(0.0, 1.0)
+    ax4.grid(True, alpha=0.3)
+    ax4.legend(loc='upper right')
+
+    # =========================
     # Plot 5: Final joint vs Expert joint (extreme β)
+    # =========================
     ax5 = axes[1, 1]
     action_names = ['(A,A)', '(A,B)', '(B,A)', '(B,B)']
-    x = np.arange(len(action_names)); width = 0.35
+    x = np.arange(len(action_names))
+    width = 0.35
+
     exemplar = results[beta_values[0]][seeds[0]]
     expert_joint = np.asarray(exemplar["expert_joint"], dtype=float)
+
     for j, b in enumerate(extremes):
         final_joint = [np.asarray(results[b][s]["history"]["joint_action_dist"][-1], dtype=float) for s in seeds]
         mean_dist = np.mean(final_joint, axis=0)
@@ -614,12 +780,17 @@ def plot_results(results, analysis, collect_every=10):
         offset = -width/2 if j == 0 else width/2
         ax5.bar(x + offset, mean_dist, width, alpha=0.8, yerr=std_dist, capsize=5, label=f'β={b}')
     ax5.plot(x, expert_joint, 'r--o', linewidth=2, markersize=5, label='Expert joint')
-    ax5.set_xlabel('Joint Actions'); ax5.set_ylabel('Probability')
+    ax5.set_xlabel('Joint Actions')
+    ax5.set_ylabel('Probability')
     ax5.set_title('Final Joint Action Distribution')
-    ax5.set_xticks(x); ax5.set_xticklabels(action_names)
-    ax5.legend(); ax5.grid(True, alpha=0.3)
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(action_names)
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
 
-    # Plot 6: Policy P(A) evolution for a representative seed
+    # =========================
+    # Plot 6: Policy P(A) evolution (representative seed) for extreme β
+    # =========================
     ax6 = axes[1, 2]
     for b in extremes:
         seed = seeds[0]
@@ -627,11 +798,13 @@ def plot_results(results, analysis, collect_every=10):
         epochs = np.arange(len(prob_hist)) * collect_every
         ax6.plot(epochs, [p[0] for p in prob_hist], label=f'β={b}, P(A)', linewidth=2)
     ax6.axhline(0.5, color='red', linestyle='--', alpha=0.7, label='0.5 ref')
-    ax6.set_xlabel('Training Epoch'); ax6.set_ylabel('P(A) for Agent 0')
+    ax6.set_xlabel('Training Epoch')
+    ax6.set_ylabel('P(A) for Agent 0')
     ax6.set_title('Policy Evolution During Training')
-    ax6.legend(); ax6.grid(True, alpha=0.3)
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
 
