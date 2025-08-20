@@ -1,7 +1,6 @@
 # magail_coordination_experiment.py
 
 import os, random
-from turtle import color
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -641,7 +640,7 @@ def plot_results(results, analysis, collect_every=10):
                 except Exception:
                     pass
 
-    ax1.axhline(0.5, linestyle='--', alpha=0.5, color='red')  # mixed policy
+    ax1.axhline(0.5, linestyle='--', alpha=0.7, color='red', label='Max entropy policy')  # mixed policy
     ax1.set_xlim(-0.6, len(beta_values) - 0.4)
     ax1.set_ylim(0.0, 1.0)
     ax1.set_xticks(x)
@@ -649,9 +648,15 @@ def plot_results(results, analysis, collect_every=10):
     ax1.set_xlabel('β')
     ax1.set_ylabel('P(A) across seeds')
     ax1.set_title('Learning Stability')
-    proxy0 = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.6)
-    proxy1 = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.6, color="orange")
-    ax1.legend([proxy0, proxy1], ['Agent 0', 'Agent 1'], loc='upper right')
+
+    handles, labels = ax1.get_legend_handles_labels()
+    vio1_patch = mpl.patches.Patch(alpha=0.4, label="Agent 0")
+    vio2_patch = mpl.patches.Patch(color="orange", alpha=0.4, label="Agent 1")
+    handles.append(vio1_patch)
+    labels.append("Agent 0")
+    handles.append(vio2_patch)
+    labels.append("Agent 1")
+    ax1.legend(handles, labels, loc='upper right')
     ax1.grid(True, alpha=0.3)
 
     # =========================
@@ -672,21 +677,25 @@ def plot_results(results, analysis, collect_every=10):
     x = np.arange(len(beta_values)).astype(float)
     v = ax2.violinplot(js_per_beta, positions=x, widths=0.6,
                        showmeans=True, showextrema=False, showmedians=False)
+    
     for pc in v['bodies']:
         pc.set_alpha(0.4)
+        pc.set_facecolor("green")
     if v.get('cmeans') is not None:
         try:
             v['cmeans'].set_linewidths(2.0)
+            v['cmeans'].set_color("green")
         except Exception:
             try:
                 v['cmeans'].set_linewidth(2.0)
+                v['cmeans'].set_color("green")
             except Exception:
                 pass
 
     exemplar = results[beta_values[0]][seeds[0]]
     expert_joint = np.asarray(exemplar["expert_joint"], dtype=float)
     indep_limit = best_independent_js(expert_joint, grid=301)
-    ax2.axhline(indep_limit, linestyle='--', alpha=0.5, color='red',)
+    ax2.axhline(indep_limit, color="red", linestyle='--', alpha=0.7, label='Independent-policy limit')
 
     ax2.set_xlabel('β')
     ax2.set_ylabel('JS distance (joint)')
@@ -695,11 +704,11 @@ def plot_results(results, analysis, collect_every=10):
     ax2.set_xticklabels([f'{b}' for b in beta_values])
     ax2.grid(True, alpha=0.3)
 
-    proxy_violin = plt.Line2D([0], [0], linestyle='-', linewidth=6, alpha=0.4)
-    proxy_limit = plt.Line2D([0], [0], linestyle='--', linewidth=2, alpha=0.7)
-    ax2.legend([proxy_violin, proxy_limit],
-               ['Across-seed distribution', 'Independent-policy limit'],
-               loc='upper right')
+    handles, labels = ax2.get_legend_handles_labels()
+    vio_patch = mpl.patches.Patch(color="green", alpha=0.4, label="Across-seed distribution")
+    handles.append(vio_patch)
+    labels.append("Across-seed distribution")
+    ax2.legend(handles, labels, loc='upper right')
 
     # =========================
     # Plot 3: Final P(A) per seed (scatter)
